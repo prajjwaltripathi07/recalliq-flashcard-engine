@@ -3,7 +3,7 @@ const multer = require("multer");
 const fs = require("fs");
 const Deck = require("../models/Deck");
 const Card = require("../models/Card");
-const { extractTextFromPDF } = require("../services/pdfService");
+const { extractTextFromPDFSmart } = require("../services/pdfService");
 const { generateFlashcardsFromText } = require("../services/anthropicService");
 
 const router = express.Router();
@@ -32,13 +32,17 @@ router.post("/upload", upload.single("pdf"), async (req, res) => {
     const title =
       req.body.title?.trim() || originalFileName.replace(/\.[^/.]+$/, "");
 
-    const extractedText = await extractTextFromPDF(filePath);
+    // Smart extraction: text PDF first, OCR fallback for scanned PDFs
+    const extraction = await extractTextFromPDFSmart(filePath);
+    const extractedText = extraction.text;
+
+    console.log("PDF extraction method used:", extraction.method);
 
     if (!extractedText || extractedText.trim().length < 100) {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.status(400).json({
         message:
-          "This PDF appears too short or unreadable. Try a text-based PDF instead of a scanned image PDF.",
+          "Could not extract enough readable text from this PDF. Please try another file.",
       });
     }
 
@@ -74,6 +78,7 @@ router.post("/upload", upload.single("pdf"), async (req, res) => {
       summary: {
         flashcardsCount: flashcards.length,
         topics: uniqueTopics,
+        extractionMethod: extraction.method, // optional but useful for debugging
       },
     });
   } catch (error) {
