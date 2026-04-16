@@ -1,154 +1,171 @@
-const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenAI } = require("@google/genai");
 
-function getAnthropicClient() {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY is missing in .env");
-  }
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
 
-  return new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-  });
+function stripMarkdownFences(text) {
+  return text
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
 }
 
-function safeParseJSON(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function extractJSONBlock(text) {
-  if (!text) return null;
-
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
-  if (fenced && fenced[1]) return fenced[1].trim();
-
-  const genericFenced = text.match(/```\s*([\s\S]*?)```/i);
-  if (genericFenced && genericFenced[1]) return genericFenced[1].trim();
-
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
+function extractJSONArray(text) {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
   if (start !== -1 && end !== -1 && end > start) {
     return text.slice(start, end + 1);
   }
-
-  return text.trim();
+  return text;
 }
 
-async function callClaude(prompt) {
-  try {
-    const anthropic = getAnthropicClient();
+function safeParseFlashcards(rawText) {
+  let cleaned = stripMarkdownFences(rawText);
+  cleaned = extractJSONArray(cleaned);
 
-    const response = await anthropic.messages.create({
-      model: "claude-3-5-haiku-latest",
-      max_tokens: 1200,
-      temperature: 0.3,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    });
+  const parsed = JSON.parse(cleaned);
 
-    const text =
-      response?.content
-        ?.filter((item) => item.type === "text")
-        ?.map((item) => item.text)
-        ?.join("\n")
-        ?.trim() || "";
-
-    return text;
-  } catch (error) {
-    console.error("❌ Claude API Error:", error);
-
-    const status = error?.status;
-    const message =
-      error?.error?.message ||
-      error?.message ||
-      "Claude request failed";
-
-    if (status === 429 || message.toLowerCase().includes("rate")) {
-      throw new Error("CLAUDE_RATE_LIMIT");
-    }
-
-    if (
-      status === 401 ||
-      message.toLowerCase().includes("authentication") ||
-      message.toLowerCase().includes("api key")
-    ) {
-      throw new Error("CLAUDE_AUTH_ERROR");
-    }
-
-    throw new Error(`CLAUDE_ERROR: ${message}`);
+  if (!Array.isArray(parsed)) {
+    throw new Error("Gemini response is not an array.");
   }
+
+  const normalized = parsed
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      question: String(item.question || "").trim(),
+      answer: String(item.answer || "").trim(),
+      topic: String(item.topic || "General").trim(),
+    }))
+    .filter((item) => item.question && item.answer);
+
+  if (normalized.length === 0) {
+    throw new Error("No valid flashcards after normalization.");
+  }
+
+  return normalized;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function generateWithModel(modelName, prompt) {
+  const response = await ai.models.generateContent({
+    model: modelName,
+    contents: prompt,
+  });
+
+  return response.text || "";
+}
+
+async function callGemini(prompt) {
+  const models = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+  ];
+
+  let lastError;
+
+  for (const modelName of models) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`Trying Gemini model: ${modelName} (attempt ${attempt})`);
+        const text = await generateWithModel(modelName, prompt);
+
+        if (!text || !text.trim()) {
+          throw new Error(`Empty response from ${modelName}`);
+        }
+
+        return text;
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          `Gemini failed with ${modelName} on attempt ${attempt}:`,
+          error.message || error
+        );
+
+        const status = error?.status;
+
+        // Retry only on temporary errors
+        if (status === 503 || status === 429 || status === 500) {
+          await sleep(1500 * attempt);
+          continue;
+        }
+
+        // If model not found / unsupported, break and try next model
+        if (status === 404) {
+          break;
+        }
+
+        // For other errors, try next model
+        break;
+      }
+    }
+  }
+
+  throw lastError || new Error("All Gemini attempts failed.");
 }
 
 async function generateFlashcardsFromText(text) {
-  const trimmedText = text.slice(0, 1800); // keep cost low
+  const truncatedText = text.slice(0, 12000);
 
-  const prompt = `
-You are an expert educational flashcard generator.
+  const basePrompt = `
+You are an expert teacher and learning designer.
 
-From the following study material, generate high-quality flashcards.
-
-Return ONLY valid JSON in this exact format:
-{
-  "topics": ["Topic 1", "Topic 2"],
-  "flashcards": [
-    {
-      "question": "What is ...?",
-      "answer": "It is ...",
-      "topic": "Topic 1"
-    }
-  ]
-}
+Convert the following educational material into high-quality flashcards for active recall and long-term retention.
 
 Rules:
-- Generate between 5 and 7 flashcards.
-- Make flashcards concise and useful.
-- Questions should be clear and exam-oriented.
-- Answers should be direct and grounded in the text.
-- Topic should be a short relevant category.
-- Do NOT include any explanation before or after the JSON.
-- Return JSON only.
+- Generate 8 to 12 flashcards
+- Cover important concepts, definitions, formulas, and examples
+- Avoid repetition
+- Questions should be clear and useful
+- Answers should be concise but complete
+- Assign a short topic label
+- Return ONLY a valid JSON array
+- No markdown
+- No explanation
 
-Study material:
-${trimmedText}
+Return exactly in this format:
+[
+  {
+    "question": "What is ...?",
+    "answer": "...",
+    "topic": "..."
+  }
+]
+
+PDF content:
+${truncatedText}
 `;
 
-  const raw = await callClaude(prompt);
+  try {
+    const firstResponse = await callGemini(basePrompt);
+    return safeParseFlashcards(firstResponse);
+  } catch (firstError) {
+    console.warn("First Gemini parse failed. Retrying with repair prompt...");
 
-  const jsonText = extractJSONBlock(raw);
-  const parsed = safeParseJSON(jsonText);
+    const repairPrompt = `
+Return ONLY a valid JSON array of flashcards from the content below.
 
-  if (!parsed || !Array.isArray(parsed.flashcards)) {
-    throw new Error("CLAUDE_INVALID_JSON");
+Rules:
+- Only JSON
+- No markdown
+- No explanation
+- Generate 8 to 12 flashcards
+- Each object must contain:
+  - "question"
+  - "answer"
+  - "topic"
+
+PDF content:
+${truncatedText}
+`;
+
+    const secondResponse = await callGemini(repairPrompt);
+    return safeParseFlashcards(secondResponse);
   }
-
-  const normalizedFlashcards = parsed.flashcards
-    .filter((card) => card && card.question && card.answer)
-    .map((card) => ({
-      question: card.question,
-      answer: card.answer,
-      topic: card.topic || "General",
-    }));
-
-  if (!normalizedFlashcards.length) {
-    throw new Error("CLAUDE_EMPTY_FLASHCARDS");
-  }
-
-  const topics = Array.isArray(parsed.topics)
-    ? parsed.topics.filter(Boolean)
-    : [...new Set(normalizedFlashcards.map((c) => c.topic))];
-
-  return {
-    topics,
-    flashcards: normalizedFlashcards,
-  };
 }
 
-module.exports = {
-  generateFlashcardsFromText,
-};
+module.exports = { generateFlashcardsFromText };

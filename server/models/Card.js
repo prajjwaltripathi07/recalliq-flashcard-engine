@@ -10,33 +10,35 @@ const cardSchema = new mongoose.Schema(
     question: {
       type: String,
       required: true,
-      trim: true,
     },
     answer: {
       type: String,
       required: true,
-      trim: true,
     },
     topic: {
       type: String,
       default: "General",
-      trim: true,
     },
-    interval: {
-      type: Number,
-      default: 1,
-    },
-    easeFactor: {
-      type: Number,
-      default: 2.5,
-    },
-    repetitions: {
+    reviewCount: {
       type: Number,
       default: 0,
     },
-    nextReview: {
+    easyStreak: {
+      type: Number,
+      default: 0,
+    },
+    lastReviewedAt: {
+      type: Date,
+      default: null,
+    },
+    nextReviewDate: {
       type: Date,
       default: Date.now,
+    },
+    status: {
+      type: String,
+      enum: ["new", "learning", "mastered"],
+      default: "new",
     },
   },
   { timestamps: true }

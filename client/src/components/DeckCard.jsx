@@ -1,65 +1,59 @@
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 export default function DeckCard({ deck }) {
-  const navigate = useNavigate();
-
-  const cardCount = deck?.cards?.length || 0;
-  const deckId = deck?._id;
-
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-200 hover:shadow-md">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <h3
-            className="text-xl font-bold text-slate-900 leading-snug break-words whitespace-normal"
-            style={{
-              overflowWrap: "anywhere",
-              wordBreak: "break-word"
-            }}
-          >
-            {deck?.title || "Untitled Deck"}
-          </h3>
+    <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition flex flex-col justify-between min-h-[240px]">
+      <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h3
+              className="text-xl font-bold text-slate-900 leading-tight break-words overflow-hidden"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                minHeight: "56px",
+              }}
+            >
+              {deck.title}
+            </h3>
 
-          <p
-            className="mt-2 text-sm text-slate-500 leading-relaxed break-words whitespace-normal"
-            style={{
-              overflowWrap: "anywhere",
-              wordBreak: "break-word"
-            }}
-          >
-            {deck?.originalFileName || "Uploaded study material"}
-          </p>
+            <p
+              className="text-sm text-slate-500 mt-1 break-words overflow-hidden"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                minHeight: "40px",
+              }}
+            >
+              {deck.originalFileName}
+            </p>
+          </div>
+
+          <span className="text-xs px-3 py-1 rounded-full bg-indigo-50 text-indigo-600 font-semibold shrink-0">
+            {deck.totalCards} cards
+          </span>
         </div>
 
-        <div className="shrink-0 rounded-2xl bg-indigo-50 px-3 py-2 text-center">
-          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-500">
-            {cardCount}
-          </p>
-          <p className="text-xs text-indigo-600">cards</p>
-        </div>
+        <p className="text-xs text-slate-400 mt-4">
+          Created: {new Date(deck.createdAt).toLocaleString()}
+        </p>
       </div>
 
-      <p className="mb-5 text-sm text-slate-400 leading-relaxed">
-        Created:{" "}
-        {deck?.createdAt
-          ? new Date(deck.createdAt).toLocaleString()
-          : "Recently"}
-      </p>
-
-      <div className="flex flex-wrap gap-3">
-        <button
-          onClick={() => navigate(`/deck/${deckId}`)}
-          className="rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white shadow-sm hover:bg-indigo-700"
+      <div className="mt-5 flex gap-3">
+        <Link
+          to={`/deck/${deck._id}`}
+          className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold"
         >
           View Deck
-        </button>
-
-        <button
-          onClick={() => navigate(`/study/${deckId}`)}
-          className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 font-semibold text-slate-700 hover:bg-slate-100"
+        </Link>
+        <Link
+          to={`/study/${deck._id}`}
+          className="px-4 py-2 rounded-xl bg-slate-100 text-slate-800 text-sm font-semibold"
         >
           Study Now
-        </button>
+        </Link>
       </div>
     </div>
   );

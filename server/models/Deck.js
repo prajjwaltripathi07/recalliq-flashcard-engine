@@ -5,15 +5,14 @@ const deckSchema = new mongoose.Schema(
     title: {
       type: String,
       required: true,
-      trim: true,
     },
     originalFileName: {
       type: String,
-      default: "",
+      required: true,
     },
-    topics: {
-      type: [String],
-      default: [],
+    totalCards: {
+      type: Number,
+      default: 0,
     },
   },
   { timestamps: true }

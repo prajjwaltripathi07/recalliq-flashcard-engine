@@ -1,269 +1,165 @@
 import { useEffect, useMemo, useState } from "react";
-import { AnimatePresence } from "framer-motion";
-import { useNavigate, useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import API from "../api/api";
 import Flashcard from "../components/Flashcard";
 
 export default function StudyPage() {
-  const { deckId } = useParams();
-  const navigate = useNavigate();
+  const { id } = useParams();
 
-  const [deck, setDeck] = useState(null);
   const [cards, setCards] = useState([]);
-  const [index, setIndex] = useState(0);
-  const [loading, setLoading] = useState(true);
-
-  const fetchDeck = async () => {
-    try {
-      const res = await API.get(`/decks/${deckId}`);
-      const fetchedDeck = res.data;
-
-      const allCards = Array.isArray(fetchedDeck?.cards) ? fetchedDeck.cards : [];
-
-      const dueCards = allCards.filter((card) => {
-        if (!card?.nextReview) return true;
-        return new Date(card.nextReview) <= new Date();
-      });
-
-      const finalCards = dueCards.length > 0 ? dueCards : allCards;
-
-      setDeck(fetchedDeck);
-      setCards(finalCards);
-      setIndex(0);
-    } catch (error) {
-      console.error("Failed to load study deck", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [deckTitle, setDeckTitle] = useState("");
+  const [dueMode, setDueMode] = useState(false);
+  const [completed, setCompleted] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
 
   useEffect(() => {
-    fetchDeck();
-  }, [deckId]);
+    const fetchData = async () => {
+      try {
+        const deckRes = await API.get(`/decks/${id}`);
+        setDeckTitle(deckRes.data.deck.title);
 
-  const currentCard = cards[index];
+        const dueRes = await API.get(`/decks/${id}/due`);
 
-  const progress = useMemo(() => {
-    if (!cards.length) return 0;
-    return ((index + 1) / cards.length) * 100;
-  }, [index, cards.length]);
+        if (dueRes.data.length > 0) {
+          setCards(dueRes.data);
+          setDueMode(true);
+        } else {
+          setCards(deckRes.data.cards);
+          setDueMode(false);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
 
-  const handleReview = async (difficulty) => {
-    if (!currentCard?._id) return;
+    fetchData();
+  }, [id]);
+
+  const currentCard = useMemo(() => cards[currentIndex], [cards, currentIndex]);
+
+  const handleReview = async (rating) => {
+    if (!currentCard || reviewing) return;
 
     try {
-      await API.post(`/cards/${currentCard._id}/review`, { difficulty });
+      setReviewing(true);
 
-      if (index < cards.length - 1) {
-        setIndex((prev) => prev + 1);
+      await API.post(`/cards/${currentCard._id}/review`, { rating });
+
+      if (currentIndex < cards.length - 1) {
+        setCurrentIndex((prev) => prev + 1);
       } else {
-        fetchDeck();
+        setCompleted(true);
       }
     } catch (error) {
-      console.error("Failed to review card", error);
-      alert("Failed to save review.");
+      console.error(error);
+      alert("Failed to review card");
+    } finally {
+      setReviewing(false);
     }
   };
 
-  if (loading) {
+  if (!cards.length && !completed) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-lg md:text-xl font-semibold text-slate-500">
-        Loading study session...
+      <div className="bg-white rounded-3xl border border-slate-200 p-8">
+        <h1 className="text-2xl font-bold">No cards available</h1>
+        <p className="text-slate-500 mt-2">Try uploading a deck first.</p>
       </div>
     );
   }
 
-  if (!deck) {
+  if (completed) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-xl md:text-2xl font-bold text-slate-800">Deck not found</p>
-        <button
-          onClick={() => navigate("/")}
-          className="rounded-2xl bg-indigo-600 px-6 py-3 font-semibold text-white"
-        >
-          Back to Dashboard
-        </button>
+      <div className="max-w-2xl mx-auto bg-white rounded-[28px] border border-slate-200 p-8 text-center">
+        <div className="w-16 h-16 rounded-full bg-green-100 text-green-700 mx-auto flex items-center justify-center text-2xl font-bold">
+          ✓
+        </div>
+        <h1 className="text-3xl font-extrabold mt-5">Session Completed</h1>
+        <p className="text-slate-500 mt-3">
+          Great job — you reviewed all cards in this study session.
+        </p>
+
+        <div className="mt-6 flex gap-3 justify-center flex-wrap">
+          <Link
+            to={`/deck/${id}`}
+            className="px-5 py-3 rounded-2xl bg-slate-100 text-slate-800 font-semibold"
+          >
+            Back to Deck
+          </Link>
+          <Link
+            to="/"
+            className="px-5 py-3 rounded-2xl bg-indigo-600 text-white font-semibold"
+          >
+            Go to Dashboard
+          </Link>
+        </div>
       </div>
     );
   }
 
-  if (!cards.length) {
-    return (
-      <div className="min-h-screen bg-transparent">
-        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/80 backdrop-blur-xl">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 md:px-6 py-4 md:py-5">
-            <h1 className="text-2xl md:text-4xl font-black text-indigo-600">RecallIQ</h1>
-            <div className="text-right">
-              <p className="text-base md:text-xl font-bold text-slate-800">Flashcard Engine</p>
-              <p className="text-xs md:text-sm text-slate-400">PDF → AI → Spaced Repetition</p>
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto max-w-5xl px-4 md:px-6 py-8 md:py-10">
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-            <button
-              onClick={() => navigate(`/deck/${deckId}`)}
-              className="rounded-2xl border border-slate-200 bg-white px-4 md:px-5 py-3 font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              ← Back to Deck
-            </button>
-
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 md:px-5 py-3 text-sm font-semibold text-slate-600">
-              Session complete
-            </div>
-          </div>
-
-          <div className="rounded-[28px] border border-slate-200 bg-white p-5 md:p-8 shadow-sm">
-            <div className="mb-4 inline-flex rounded-full bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-600">
-              Study Mode
-            </div>
-
-            <h2 className="text-2xl md:text-4xl font-black leading-snug text-slate-900 break-words whitespace-normal">
-              {deck.title}
-            </h2>
-
-            <p className="mt-3 text-base md:text-lg text-slate-500">
-              No due cards found or you finished all cards in this deck.
-            </p>
-
-            <div className="mt-8 rounded-3xl border border-emerald-100 bg-emerald-50 p-6 md:p-10 text-center">
-              <div className="mb-4 text-4xl md:text-5xl">🎉</div>
-              <h3 className="text-2xl md:text-3xl font-black text-slate-900">
-                Study session complete
-              </h3>
-              <p className="mt-3 text-sm md:text-base text-slate-600">
-                Great work — you’re staying consistent.
-              </p>
-
-              <div className="mt-8 flex flex-wrap justify-center gap-4">
-                <button
-                  onClick={() => navigate(`/deck/${deckId}`)}
-                  className="rounded-2xl border border-slate-200 bg-white px-5 md:px-6 py-3 font-semibold text-slate-700"
-                >
-                  View Deck
-                </button>
-                <button
-                  onClick={() => navigate("/")}
-                  className="rounded-2xl bg-indigo-600 px-5 md:px-6 py-3 font-semibold text-white"
-                >
-                  Back to Dashboard
-                </button>
-              </div>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  const progress = ((currentIndex + 1) / cards.length) * 100;
 
   return (
-    <div className="min-h-screen bg-transparent">
-      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 md:px-6 py-4 md:py-5">
-          <h1 className="text-2xl md:text-4xl font-black text-indigo-600">RecallIQ</h1>
-          <div className="text-right">
-            <p className="text-base md:text-xl font-bold text-slate-800">Flashcard Engine</p>
-            <p className="text-xs md:text-sm text-slate-400">PDF → AI → Spaced Repetition</p>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-5xl px-4 md:px-6 py-8 md:py-10">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-          <button
-            onClick={() => navigate(`/deck/${deckId}`)}
-            className="rounded-2xl border border-slate-200 bg-white px-4 md:px-5 py-3 font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            ← Back to Deck
-          </button>
-
-          <div className="rounded-2xl border border-slate-200 bg-white px-4 md:px-5 py-3 text-sm font-semibold text-slate-600">
-            Card {index + 1} of {cards.length}
-          </div>
-        </div>
-
-        <motion.section
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="rounded-[28px] border border-slate-200 bg-white p-5 md:p-8 shadow-sm"
-        >
-          <div className="mb-4 inline-flex rounded-full bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-600">
-            Study Mode
+    <div className="max-w-3xl mx-auto space-y-6">
+      <div className="bg-white rounded-3xl border border-slate-200 p-5 md:p-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-extrabold">{deckTitle}</h1>
+            <p className="text-slate-500 mt-1">
+              Card {currentIndex + 1} of {cards.length}
+            </p>
           </div>
 
-          <h2 className="text-2xl md:text-4xl font-black leading-snug text-slate-900 break-words whitespace-normal">
-            {deck.title}
-          </h2>
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <div className="rounded-full bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-600">
+          {dueMode ? (
+            <span className="text-xs px-3 py-2 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-100">
               Studying due cards first
-            </div>
-            <div className="text-sm text-slate-500">
-              Stay consistent for better retention
-            </div>
-          </div>
+            </span>
+          ) : (
+            <span className="text-xs px-3 py-2 rounded-full bg-slate-100 text-slate-700 font-semibold">
+              Full deck mode
+            </span>
+          )}
+        </div>
 
-          <div className="mt-5 h-3 w-full overflow-hidden rounded-full bg-slate-100">
-            <motion.div
-              className="h-full rounded-full bg-gradient-to-r from-indigo-600 to-blue-500"
-              initial={{ width: 0 }}
-              animate={{ width: `${progress}%` }}
-              transition={{ duration: 0.35 }}
-            />
-          </div>
-        </motion.section>
+        <div className="w-full bg-slate-100 rounded-full h-3 mt-5">
+          <div
+            className="bg-indigo-600 h-3 rounded-full transition-all duration-300"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      </div>
 
-        <section className="mt-8">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentCard?._id}
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.25 }}
-            >
-              <Flashcard card={currentCard} />
-            </motion.div>
-          </AnimatePresence>
-        </section>
+      <Flashcard key={currentCard?._id} card={currentCard} />
+      <div className="grid grid-cols-3 gap-4">
+        <button
+          onClick={() => handleReview("hard")}
+          disabled={reviewing}
+          className="px-4 py-4 rounded-2xl bg-red-500 text-white font-bold disabled:opacity-60 hover:scale-[1.01] transition"
+        >
+          Hard
+        </button>
+        <button
+          onClick={() => handleReview("medium")}
+          disabled={reviewing}
+          className="px-4 py-4 rounded-2xl bg-amber-500 text-white font-bold disabled:opacity-60 hover:scale-[1.01] transition"
+        >
+          Medium
+        </button>
+        <button
+          onClick={() => handleReview("easy")}
+          disabled={reviewing}
+          className="px-4 py-4 rounded-2xl bg-green-600 text-white font-bold disabled:opacity-60 hover:scale-[1.01] transition"
+        >
+          Easy
+        </button>
+      </div>
 
-        <section className="mt-8">
-          <div className="grid gap-4 md:grid-cols-3">
-            <motion.button
-              whileTap={{ scale: 0.98 }}
-              onClick={() => handleReview("hard")}
-              className="rounded-3xl bg-red-500 px-6 py-4 md:py-5 text-base md:text-lg font-bold text-white shadow-sm hover:bg-red-600"
-            >
-              Hard
-            </motion.button>
-
-            <motion.button
-              whileTap={{ scale: 0.98 }}
-              onClick={() => handleReview("medium")}
-              className="rounded-3xl bg-amber-500 px-6 py-4 md:py-5 text-base md:text-lg font-bold text-white shadow-sm hover:bg-amber-600"
-            >
-              Medium
-            </motion.button>
-
-            <motion.button
-              whileTap={{ scale: 0.98 }}
-              onClick={() => handleReview("easy")}
-              className="rounded-3xl bg-emerald-500 px-6 py-4 md:py-5 text-base md:text-lg font-bold text-white shadow-sm hover:bg-emerald-600"
-            >
-              Easy
-            </motion.button>
-          </div>
-        </section>
-
-        <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
-          <h3 className="text-lg md:text-xl font-bold text-slate-900">Review logic</h3>
-          <p className="mt-2 text-sm md:text-base text-slate-500">
-            Hard = shorter interval • Medium = balanced review • Easy = longer spacing
-          </p>
-        </section>
-      </main>
+      <div className="bg-white rounded-3xl border border-slate-200 p-5">
+        <h3 className="font-bold text-lg">Review logic</h3>
+        <p className="text-sm text-slate-500 mt-2">
+          Hard → 1 day • Medium → 3 days • Easy → 7 / 14 / 30 days based on retention streak.
+        </p>
+      </div>
     </div>
   );
 }

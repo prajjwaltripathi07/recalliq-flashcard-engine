@@ -1,290 +1,200 @@
-import { useEffect, useMemo, useState } from "react";
-import axios from "axios";
-import { Link } from "react-router-dom";
-
-const API_BASE = "http://localhost:5000/api";
+import { useEffect, useState } from "react";
+import API from "../api/api";
+import StatsCard from "../components/StatsCard";
+import DeckCard from "../components/DeckCard";
+import LoadingOverlay from "../components/LoadingOverlay";
 
 export default function Dashboard() {
-  const [decks, setDecks] = useState([]);
   const [stats, setStats] = useState({
     totalDecks: 0,
     totalCards: 0,
     dueToday: 0,
-    mastered: 0,
+    masteredCards: 0,
   });
-  const [search, setSearch] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [title, setTitle] = useState("");
-  const [file, setFile] = useState(null);
 
-  const fetchDecks = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/decks`, {
-        params: { search },
-      });
-      setDecks(res.data || []);
-    } catch (error) {
-      console.error("Error fetching decks:", error);
-    }
-  };
+  const [decks, setDecks] = useState([]);
+  const [search, setSearch] = useState("");
+  const [title, setTitle] = useState("");
+  const [pdf, setPdf] = useState(null);
+
+  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("Extracting PDF content...");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
   const fetchStats = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/decks/stats/overview`);
-      setStats(
-        res.data || {
-          totalDecks: 0,
-          totalCards: 0,
-          dueToday: 0,
-          mastered: 0,
-        }
-      );
-    } catch (error) {
-      console.error("Error fetching stats:", error);
+      const res = await API.get("/decks/stats/overview");
+      setStats(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchDecks = async (searchTerm = "") => {
+    try {
+      const res = await API.get(`/decks?search=${encodeURIComponent(searchTerm)}`);
+      setDecks(res.data);
+    } catch (err) {
+      console.error(err);
     }
   };
 
   useEffect(() => {
-    fetchDecks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
-
-  useEffect(() => {
     fetchStats();
+    fetchDecks();
   }, []);
 
   const handleUpload = async (e) => {
     e.preventDefault();
+    setErrorMessage("");
+    setSuccessMessage("");
 
-    if (!file) {
-      alert("Please select a PDF file first.");
+    if (!pdf) {
+      setErrorMessage("Please select a PDF file first.");
       return;
     }
 
     const formData = new FormData();
-    formData.append("file", file);
-
-    if (title.trim()) {
-      formData.append("title", title.trim());
-    }
+    formData.append("pdf", pdf);
+    formData.append("title", title);
 
     try {
-      setUploading(true);
+      setLoading(true);
+      setLoadingMessage("Extracting PDF content...");
 
-      const res = await axios.post(`${API_BASE}/decks/upload`, formData, {
+      const loadingTimer = setTimeout(() => {
+        setLoadingMessage("Generating high-quality flashcards with Claude...");
+      }, 1500);
+
+      const res = await API.post("/decks/upload", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
       });
 
-      if (res.data?.success) {
-        alert(`Deck created successfully! ${res.data.flashcardsCreated} flashcards generated.`);
-      } else {
-        alert("Deck uploaded successfully.");
-      }
+      clearTimeout(loadingTimer);
 
       setTitle("");
-      setFile(null);
+      setPdf(null);
 
-      // reset file input manually
-      const fileInput = document.getElementById("pdf-upload-input");
-      if (fileInput) fileInput.value = "";
-
-      fetchDecks();
       fetchStats();
+      fetchDecks(search);
+
+      const flashcardsCount = res.data?.summary?.flashcardsCount || 0;
+      const topics = res.data?.summary?.topics || [];
+
+      setSuccessMessage(
+        `Deck created successfully with ${flashcardsCount} flashcards${
+          topics.length ? ` across ${topics.length} topic(s)` : ""
+        }.`
+      );
     } catch (error) {
-      console.error("Upload error:", error);
-
-      const serverMessage =
-        error?.response?.data?.error || "Upload failed. Please try again.";
-
-      alert(serverMessage);
+      console.error(error);
+      setErrorMessage(
+        error.response?.data?.message || "Upload failed. Please try again."
+      );
     } finally {
-      setUploading(false);
+      setLoading(false);
     }
   };
 
-  const filteredDecks = useMemo(() => decks || [], [decks]);
+  const handleSearch = async (e) => {
+    const value = e.target.value;
+    setSearch(value);
+    fetchDecks(value);
+  };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {/* Header */}
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-8">
+      <LoadingOverlay open={loading} message={loadingMessage} />
+
+      <section className="bg-white rounded-[28px] shadow-sm border border-slate-200 p-6 md:p-8">
+        <div className="max-w-3xl">
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight mb-3">
+            Turn any PDF into smart, practice-ready flashcards
+          </h1>
+          <p className="text-slate-500 mb-6">
+            Upload a chapter, class note, or concept sheet. RecallIQ extracts the content,
+            generates AI-powered flashcards, and schedules review using spaced repetition.
+          </p>
+        </div>
+
+        <form onSubmit={handleUpload} className="grid md:grid-cols-3 gap-4">
+          <input
+            type="text"
+            placeholder="Deck title (optional)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="border border-slate-300 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-200"
+          />
+
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={(e) => setPdf(e.target.files[0])}
+            className="border border-slate-300 rounded-2xl px-4 py-3 bg-white"
+          />
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="rounded-2xl bg-indigo-600 text-white px-4 py-3 font-semibold disabled:opacity-60 hover:bg-indigo-700 transition"
+          >
+            {loading ? "Processing..." : "Upload & Generate"}
+          </button>
+        </form>
+
+        {successMessage && (
+          <div className="mt-4 rounded-2xl bg-green-50 text-green-700 px-4 py-3 text-sm font-medium border border-green-100">
+            {successMessage}
+          </div>
+        )}
+
+        {errorMessage && (
+          <div className="mt-4 rounded-2xl bg-red-50 text-red-700 px-4 py-3 text-sm font-medium border border-red-100">
+            {errorMessage}
+          </div>
+        )}
+      </section>
+
+      <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatsCard title="Total Decks" value={stats.totalDecks} hint="All uploaded study decks" />
+        <StatsCard title="Total Cards" value={stats.totalCards} hint="AI-generated flashcards" />
+        <StatsCard title="Due Today" value={stats.dueToday} hint="Cards ready for review" />
+        <StatsCard title="Mastered" value={stats.masteredCards} hint="Cards with strong retention" />
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">RecallIQ Dashboard</h1>
-            <p className="mt-2 text-sm text-slate-400">
-              Upload PDFs, generate flashcards, and study smarter.
+            <h2 className="text-2xl font-extrabold">Your Decks</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Search, revisit, and continue where you left off.
             </p>
           </div>
+
+          <input
+            type="text"
+            placeholder="Search decks..."
+            value={search}
+            onChange={handleSearch}
+            className="border border-slate-300 rounded-2xl px-4 py-3 w-full max-w-sm focus:ring-2 focus:ring-indigo-200 outline-none"
+          />
         </div>
 
-        {/* Stats */}
-        <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard label="Total Decks" value={stats.totalDecks} />
-          <StatCard label="Total Cards" value={stats.totalCards} />
-          <StatCard label="Due Today" value={stats.dueToday} />
-          <StatCard label="Mastered" value={stats.mastered} />
-        </div>
-
-        {/* Upload + Search */}
-        <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* Upload Form */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-lg lg:col-span-2">
-            <h2 className="mb-4 text-xl font-semibold">Create New Deck</h2>
-
-            <form onSubmit={handleUpload} className="space-y-4">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-slate-300">
-                  Deck Title (optional)
-                </label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Enter deck title"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-medium text-slate-300">
-                  Upload PDF
-                </label>
-                <input
-                  id="pdf-upload-input"
-                  type="file"
-                  accept="application/pdf"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                  className="block w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-300 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-blue-500"
-                />
-                {file && (
-                  <p className="mt-2 text-xs text-slate-400">
-                    Selected: <span className="text-slate-200">{file.name}</span>
-                  </p>
-                )}
-              </div>
-
-              <button
-                type="submit"
-                disabled={uploading}
-                className="w-full rounded-xl bg-blue-600 px-4 py-3 font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {uploading ? "Generating Flashcards..." : "Upload & Generate"}
-              </button>
-            </form>
+        {decks.length === 0 ? (
+          <div className="bg-white rounded-3xl border border-slate-200 p-8 text-slate-500">
+            No decks yet. Upload your first PDF to generate a flashcard deck.
           </div>
-
-          {/* Search */}
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-lg">
-            <h2 className="mb-4 text-xl font-semibold">Search Decks</h2>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by title..."
-              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-blue-500"
-            />
-            <p className="mt-3 text-sm text-slate-400">
-              Instantly filter decks by name or uploaded PDF.
-            </p>
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {decks.map((deck) => (
+              <DeckCard key={deck._id} deck={deck} />
+            ))}
           </div>
-        </div>
-
-        {/* Decks List */}
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-lg">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Your Decks</h2>
-            <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">
-              {filteredDecks.length} deck{filteredDecks.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-
-          {filteredDecks.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950 p-8 text-center">
-              <p className="text-lg font-medium text-slate-300">No decks found</p>
-              <p className="mt-2 text-sm text-slate-500">
-                Upload a PDF above to create your first flashcard deck.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {filteredDecks.map((deck) => (
-                <div
-                  key={deck._id}
-                  className="flex min-h-[220px] flex-col rounded-2xl border border-slate-800 bg-slate-950 p-5 transition hover:border-slate-700"
-                >
-                  <div className="mb-3">
-                    <h3 className="line-clamp-2 break-words text-lg font-semibold text-white">
-                      {deck.title || "Untitled Deck"}
-                    </h3>
-
-                    {deck.originalFileName && (
-                      <p className="mt-2 line-clamp-2 break-words text-sm text-slate-400">
-                        {deck.originalFileName}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="mb-4 grid grid-cols-2 gap-3">
-                    <div className="rounded-xl bg-slate-900 p-3">
-                      <p className="text-xs text-slate-400">Cards</p>
-                      <p className="mt-1 text-lg font-semibold text-white">
-                        {deck.cardCount || 0}
-                      </p>
-                    </div>
-                    <div className="rounded-xl bg-slate-900 p-3">
-                      <p className="text-xs text-slate-400">Due</p>
-                      <p className="mt-1 text-lg font-semibold text-white">
-                        {deck.dueCount || 0}
-                      </p>
-                    </div>
-                  </div>
-
-                  {Array.isArray(deck.topics) && deck.topics.length > 0 && (
-                    <div className="mb-4 flex flex-wrap gap-2">
-                      {deck.topics.slice(0, 3).map((topic, index) => (
-                        <span
-                          key={`${deck._id}-topic-${index}`}
-                          className="max-w-full truncate rounded-full bg-blue-600/15 px-3 py-1 text-xs text-blue-300"
-                          title={topic}
-                        >
-                          {topic}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="mt-auto flex gap-3">
-                    <Link
-                      to={`/study/${deck._id}`}
-                      className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-center text-sm font-medium text-white transition hover:bg-blue-500"
-                    >
-                      Study
-                    </Link>
-
-                    <Link
-                      to={`/deck/${deck._id}`}
-                      className="flex-1 rounded-xl border border-slate-700 px-4 py-2.5 text-center text-sm font-medium text-slate-200 transition hover:bg-slate-800"
-                    >
-                      View
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatCard({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-lg">
-      <p className="text-sm text-slate-400">{label}</p>
-      <p className="mt-2 text-3xl font-bold text-white">{value ?? 0}</p>
+        )}
+      </section>
     </div>
   );
 }

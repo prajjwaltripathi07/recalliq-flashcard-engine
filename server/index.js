@@ -22,8 +22,12 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
+console.log("ENV CHECK -> PORT:", process.env.PORT);
+console.log("ENV CHECK -> MONGO_URI exists:", !!process.env.MONGO_URI);
+console.log("ENV CHECK -> GEMINI_API_KEY exists:", !!process.env.GEMINI_API_KEY);
+
 if (!MONGO_URI) {
-  console.error("❌ MONGO_URI is missing in .env");
+  console.error("❌ MONGO_URI is missing. Check server/.env file.");
   process.exit(1);
 }
 
@@ -36,5 +40,5 @@ mongoose
     });
   })
   .catch((err) => {
-    console.error("❌ MongoDB connection error:", err.message);
+    console.error("❌ MongoDB connection error:", err);
   });

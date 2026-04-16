@@ -1,206 +1,168 @@
 const express = require("express");
 const multer = require("multer");
-const pdfParse = require("pdf-parse");
-
+const fs = require("fs");
 const Deck = require("../models/Deck");
 const Card = require("../models/Card");
+const { extractTextFromPDF } = require("../services/pdfService");
 const { generateFlashcardsFromText } = require("../services/anthropicService");
 
 const router = express.Router();
 
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  dest: "uploads/",
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype !== "application/pdf") {
+      return cb(new Error("Only PDF files are allowed."));
+    }
+    cb(null, true);
+  },
 });
 
-// GET all decks (supports search query)
+router.post("/upload", upload.single("pdf"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "PDF file is required." });
+    }
+
+    const filePath = req.file.path;
+    const originalFileName = req.file.originalname;
+    const title =
+      req.body.title?.trim() || originalFileName.replace(/\.[^/.]+$/, "");
+
+    const extractedText = await extractTextFromPDF(filePath);
+
+    if (!extractedText || extractedText.trim().length < 100) {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(400).json({
+        message:
+          "This PDF appears too short or unreadable. Try a text-based PDF instead of a scanned image PDF.",
+      });
+    }
+
+    const flashcards = await generateFlashcardsFromText(extractedText);
+
+    if (!Array.isArray(flashcards) || flashcards.length === 0) {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(500).json({ message: "No flashcards generated." });
+    }
+
+    const deck = await Deck.create({
+      title,
+      originalFileName,
+      totalCards: flashcards.length,
+    });
+
+    const cardsToInsert = flashcards.map((card) => ({
+      deckId: deck._id,
+      question: card.question,
+      answer: card.answer,
+      topic: card.topic || "General",
+    }));
+
+    await Card.insertMany(cardsToInsert);
+
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+    const uniqueTopics = [...new Set(flashcards.map((c) => c.topic || "General"))];
+
+    res.status(201).json({
+      message: "Deck created successfully",
+      deck,
+      summary: {
+        flashcardsCount: flashcards.length,
+        topics: uniqueTopics,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+
+    res.status(500).json({
+      message: error.message || "Failed to process PDF and generate flashcards.",
+    });
+  }
+});
+
 router.get("/", async (req, res) => {
   try {
-    const search = req.query.search?.trim();
+    const { search = "" } = req.query;
 
     const query = search
-      ? {
-          $or: [
-            { title: { $regex: search, $options: "i" } },
-            { originalFileName: { $regex: search, $options: "i" } },
-          ],
-        }
+      ? { title: { $regex: search, $options: "i" } }
       : {};
 
     const decks = await Deck.find(query).sort({ createdAt: -1 });
 
-    const decksWithCounts = await Promise.all(
-      decks.map(async (deck) => {
-        const cardCount = await Card.countDocuments({ deckId: deck._id });
-        const dueCount = await Card.countDocuments({
-          deckId: deck._id,
-          nextReview: { $lte: new Date() },
-        });
-
-        return {
-          ...deck.toObject(),
-          cardCount,
-          dueCount,
-        };
-      })
-    );
-
-    res.json(decksWithCounts);
+    res.json(decks);
   } catch (error) {
-    console.error("❌ GET /api/decks error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ message: "Failed to fetch decks" });
   }
 });
 
-// GET dashboard stats overview
 router.get("/stats/overview", async (req, res) => {
   try {
-    const totalDecks = await Deck.countDocuments();
-    const totalCards = await Card.countDocuments();
-
     const now = new Date();
 
-    const dueToday = await Card.countDocuments({
-      nextReview: { $lte: now },
-    });
-
-    const mastered = await Card.countDocuments({
-      repetitions: { $gte: 5 },
-    });
+    const [totalDecks, totalCards, dueToday, masteredCards] =
+      await Promise.all([
+        Deck.countDocuments(),
+        Card.countDocuments(),
+        Card.countDocuments({ nextReviewDate: { $lte: now } }),
+        Card.countDocuments({ status: "mastered" }),
+      ]);
 
     res.json({
       totalDecks,
       totalCards,
       dueToday,
-      mastered,
+      masteredCards,
     });
   } catch (error) {
-    console.error("❌ GET /api/decks/stats/overview error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ message: "Failed to fetch stats" });
   }
 });
 
-// GET single deck by ID
 router.get("/:id", async (req, res) => {
   try {
     const deck = await Deck.findById(req.params.id);
     if (!deck) {
-      return res.status(404).json({ error: "Deck not found" });
+      return res.status(404).json({ message: "Deck not found" });
     }
 
     const cards = await Card.find({ deckId: deck._id }).sort({ createdAt: 1 });
 
+    const topics = [...new Set(cards.map((c) => c.topic || "General"))];
+
     res.json({
-      ...deck.toObject(),
+      deck,
       cards,
-      cardCount: cards.length,
+      meta: {
+        topics,
+      },
     });
   } catch (error) {
-    console.error("❌ GET /api/decks/:id error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ message: "Failed to fetch deck" });
   }
 });
 
-// UPLOAD PDF + generate deck
-router.post("/upload", upload.single("file"), async (req, res) => {
+router.get("/:id/due", async (req, res) => {
   try {
-    console.log("📥 Upload route hit");
+    const now = new Date();
 
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
+    const cards = await Card.find({
+      deckId: req.params.id,
+      nextReviewDate: { $lte: now },
+    }).sort({ nextReviewDate: 1 });
 
-    console.log("📄 File received:", req.file.originalname);
-
-    const pdfData = await pdfParse(req.file.buffer);
-    const extractedText = (pdfData.text || "").trim();
-
-    console.log("📝 Extracted text length:", extractedText.length);
-
-    if (!extractedText || extractedText.length < 50) {
-      return res.status(400).json({
-        error: "Could not extract enough text from PDF",
-      });
-    }
-
-    const generated = await generateFlashcardsFromText(extractedText);
-
-    console.log("🤖 Generated flashcards:", generated?.flashcards?.length || 0);
-
-    if (
-      !generated ||
-      !Array.isArray(generated.flashcards) ||
-      generated.flashcards.length === 0
-    ) {
-      return res.status(500).json({
-        error: "Flashcard generation failed or returned empty data",
-      });
-    }
-
-    const deckTitle =
-      req.body.title?.trim() ||
-      req.file.originalname.replace(/\.pdf$/i, "") ||
-      "Untitled Deck";
-
-    const deck = await Deck.create({
-      title: deckTitle,
-      originalFileName: req.file.originalname,
-      topics: Array.isArray(generated.topics) ? generated.topics : [],
-    });
-
-    const cardsToInsert = generated.flashcards.map((card) => ({
-      deckId: deck._id,
-      question: card.question || "Untitled Question",
-      answer: card.answer || "No answer provided",
-      topic: card.topic || "General",
-      interval: 1,
-      easeFactor: 2.5,
-      repetitions: 0,
-      nextReview: new Date(),
-    }));
-
-    const insertedCards = await Card.insertMany(cardsToInsert);
-
-    res.status(201).json({
-      success: true,
-      deck: {
-        ...deck.toObject(),
-        cardCount: insertedCards.length,
-        dueCount: insertedCards.length,
-      },
-      flashcardsCreated: insertedCards.length,
-      topics: generated.topics || [],
-    });
+    res.json(cards);
   } catch (error) {
-    console.error("❌ POST /api/decks/upload error:", error);
-
-    if (error.message === "CLAUDE_RATE_LIMIT") {
-      return res.status(429).json({
-        error: "Claude API rate limit reached. Please try again in a moment.",
-      });
-    }
-
-    if (error.message === "CLAUDE_AUTH_ERROR") {
-      return res.status(401).json({
-        error: "Invalid Anthropic API key. Check ANTHROPIC_API_KEY in server/.env",
-      });
-    }
-
-    if (error.message === "CLAUDE_INVALID_JSON") {
-      return res.status(502).json({
-        error: "Claude returned invalid JSON format. Please try again.",
-      });
-    }
-
-    if (error.message === "CLAUDE_EMPTY_FLASHCARDS") {
-      return res.status(502).json({
-        error: "Claude returned no usable flashcards. Try another PDF.",
-      });
-    }
-
-    return res.status(500).json({
-      error: error.message || "Upload failed",
-    });
+    res.status(500).json({ message: "Failed to fetch due cards" });
   }
 });
 
